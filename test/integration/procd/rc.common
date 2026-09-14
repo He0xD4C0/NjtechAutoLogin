@@ -1,0 +1,46 @@
+#!/bin/sh
+initscript="$1"
+action="$2"
+. "$initscript"
+
+case "$action" in
+  enable)
+    : > /tmp/njtechlogin-enabled
+    ;;
+  disable)
+    rm -f /tmp/njtechlogin-enabled
+    ;;
+  start)
+    PROCD_COMMAND=""
+    procd_open_instance() { :; }
+    procd_set_param() {
+      key="$1"
+      shift
+      if [ "$key" = command ]; then PROCD_COMMAND="$*"; fi
+    }
+    procd_close_instance() {
+	  sh -c "$PROCD_COMMAND" >/dev/null 2>&1 </dev/null &
+      echo "$!" > /tmp/njtechlogin-procd.pid
+    }
+    start_service
+    ;;
+  stop)
+    if [ -f /tmp/njtechlogin-procd.pid ]; then
+      kill "$(cat /tmp/njtechlogin-procd.pid)" 2>/dev/null || true
+      rm -f /tmp/njtechlogin-procd.pid
+    fi
+    ;;
+  restart)
+    "$initscript" stop
+    "$initscript" start
+    ;;
+  running)
+	test -f /tmp/njtechlogin-procd.pid || exit 1
+	pid="$(cat /tmp/njtechlogin-procd.pid)"
+	test -n "$pid" || exit 1
+	kill -0 "$pid" 2>/dev/null
+    ;;
+  *)
+    exit 2
+    ;;
+esac

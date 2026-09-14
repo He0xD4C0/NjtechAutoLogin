@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+
+description="BusyBox syslog daemon for integration tests"
+command="/sbin/syslogd"
+command_args="-n"
+command_background=true
+pidfile="/run/syslogd.pid"

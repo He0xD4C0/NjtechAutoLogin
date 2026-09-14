@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: src/go.sum
+      - run: go test ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+
+  alpine-openrc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Alpine/OpenRC test image
+        run: docker build -f test/integration/openrc/Dockerfile -t njtechlogin-openrc-test .
+      - name: Exercise OpenRC lifecycle with init as PID 1
+        run: |
+          set -eu
+          docker run -d --privileged --name njtechlogin-openrc-test njtechlogin-openrc-test
+          cleanup() { docker rm -f njtechlogin-openrc-test >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec njtechlogin-openrc-test rc-status --runlevel | grep -q '^default$'; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec njtechlogin-openrc-test /opt/njtechlogin-test/smoke.sh
+
+  openwrt-procd-simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build OpenWrt/procd simulation image
+        run: docker build -f test/integration/procd/Dockerfile -t njtechlogin-procd-test .
+      - name: Exercise procd init script simulation
+        run: docker run --rm njtechlogin-procd-test
+
+  systemd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build systemd test image
+        run: docker build -f test/integration/systemd/Dockerfile -t njtechlogin-systemd-test .
+      - name: Exercise systemd lifecycle
+        run: |
+          set -eu
+          docker run -d --privileged --name njtechlogin-systemd-test \
+            --tmpfs /run --tmpfs /run/lock \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            njtechlogin-systemd-test
+          cleanup() { docker rm -f njtechlogin-systemd-test >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec njtechlogin-systemd-test systemctl is-system-running --wait; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec njtechlogin-systemd-test /opt/njtechlogin-test/smoke.sh
+
+  cross-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, suffix: linux-amd64 }
+          - { goos: linux, goarch: arm64, suffix: linux-arm64 }
+          - { goos: linux, goarch: '386', suffix: linux-386 }
+          - { goos: linux, goarch: mips, suffix: linux-mips, gomips: softfloat }
+          - { goos: linux, goarch: mipsle, suffix: linux-mipsle, gomips: softfloat }
+          - { goos: darwin, goarch: amd64, suffix: darwin-amd64 }
+          - { goos: darwin, goarch: arm64, suffix: darwin-arm64 }
+          - { goos: freebsd, goarch: amd64, suffix: freebsd-amd64 }
+          - { goos: freebsd, goarch: arm64, suffix: freebsd-arm64 }
+          - { goos: openbsd, goarch: amd64, suffix: openbsd-amd64 }
+          - { goos: openbsd, goarch: arm64, suffix: openbsd-arm64 }
+          - { goos: netbsd, goarch: amd64, suffix: netbsd-amd64 }
+          - { goos: netbsd, goarch: arm64, suffix: netbsd-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: src/go.sum
+      - name: Build ${{ matrix.suffix }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+        run: |
+          if [ -z "${GOMIPS:-}" ]; then unset GOMIPS; fi
+          go build -trimpath -ldflags "-X main.version=2.0.0-dev" -o "/tmp/njtechlogin-${{ matrix.suffix }}" .

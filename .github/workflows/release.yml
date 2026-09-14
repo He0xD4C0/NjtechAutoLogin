@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: src/go.sum
+      - name: Build release binaries
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p ../dist
+          build() {
+            target_os="$1"
+            target_arch="$2"
+            suffix="$3"
+            gomips="${4:-}"
+            if [ -n "$gomips" ]; then
+              CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" GOMIPS="$gomips" \
+                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION#v}" \
+                -o "../dist/njtechlogin-${suffix}" .
+            else
+              CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
+                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION#v}" \
+                -o "../dist/njtechlogin-${suffix}" .
+            fi
+          }
+          build linux amd64 linux-amd64
+          build linux arm64 linux-arm64
+          build linux 386 linux-386
+          build linux mips linux-mips softfloat
+          build linux mipsle linux-mipsle softfloat
+          build darwin amd64 darwin-amd64
+          build darwin arm64 darwin-arm64
+          cd ../dist
+          sha256sum njtechlogin-* > SHA256SUMS
+      - name: Publish GitHub release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "${GITHUB_REF_NAME}" ./* \
+            --generate-notes --verify-tag ${prerelease}
