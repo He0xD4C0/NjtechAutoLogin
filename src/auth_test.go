@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -158,5 +160,123 @@ func TestRedactSecretRemovesPasswordFromPortalMessage(t *testing.T) {
 	got := redactSecret("password secret was rejected", "secret")
 	if strings.Contains(got, "secret") || got != "password [REDACTED] was rejected" {
 		t.Fatalf("unsafe message: %q", got)
+	}
+}
+
+func TestLoginRejectsLoadConfigRedirect(t *testing.T) {
+	oldClient := httpClient
+	oldLogger := globalLogger
+	defer func() {
+		httpClient = oldClient
+		globalLogger = oldLogger
+	}()
+	globalLogger = NewStreamLogger(io.Discard)
+
+	var requests []string
+	httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req.URL.String())
+		if req.URL.Path == "/" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("homepage")),
+				Request:    req,
+			}, nil
+		}
+		header := make(http.Header)
+		header.Set("Location", "https://attacker.example/capture")
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})}
+
+	err := login(context.Background(), "student", "secret", "telecom")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("expected redirect rejection, got %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("redirected request count = %d, want 2: %v", len(requests), requests)
+	}
+	for _, requestURL := range requests {
+		if strings.Contains(requestURL, "attacker.example") || strings.Contains(requestURL, "user_password") {
+			t.Fatalf("sensitive request escaped portal: %s", requestURL)
+		}
+	}
+}
+
+func TestLoadConfigFailureDoesNotSendPassword(t *testing.T) {
+	oldClient := httpClient
+	oldLogger := globalLogger
+	defer func() {
+		httpClient = oldClient
+		globalLogger = oldLogger
+	}()
+	globalLogger = NewStreamLogger(io.Discard)
+
+	var loginRequests int
+	httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := "homepage"
+		if strings.Contains(req.URL.Path, "loadConfig") {
+			body = `dr1001({"code":0})`
+		}
+		if strings.Contains(req.URL.Path, "/login") {
+			loginRequests++
+			body = `dr1003({"result":1,"msg":"ok"})`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	err := login(context.Background(), "student", "secret", "telecom")
+	if err == nil || !strings.Contains(err.Error(), "业务码") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if loginRequests != 0 {
+		t.Fatalf("login request sent %d times after loadConfig failure", loginRequests)
+	}
+}
+
+func TestReadResponseBodyRejectsOversizedResponse(t *testing.T) {
+	resp := &http.Response{Body: io.NopCloser(bytes.NewReader(make([]byte, maxPortalResponseBytes+1)))}
+	if _, err := readResponseBody(resp); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("expected size error, got %v", err)
+	}
+}
+
+func TestReadResponseBodyRejectsGzipBomb(t *testing.T) {
+	oldLogger := globalLogger
+	globalLogger = NewStreamLogger(io.Discard)
+	defer func() {
+		globalLogger = oldLogger
+	}()
+
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(make([]byte, maxPortalResponseBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp := &http.Response{Body: io.NopCloser(bytes.NewReader(compressed.Bytes()))}
+	if _, err := readResponseBody(resp); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("expected gzip size error, got %v", err)
+	}
+}
+
+func TestExtractJSONPMultiline(t *testing.T) {
+	data, err := extractJSONP([]byte("dr1003(\n {\"result\":1,\n\"msg\":\"ok\"}\n);"), "dr1003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{\"result\":1,\n\"msg\":\"ok\"}" {
+		t.Fatalf("unexpected JSON: %s", data)
 	}
 }

@@ -18,7 +18,7 @@
 
 ## 编译
 
-编译需要 Go 1.24 或更高版本；生成的静态 Linux 二进制运行时不需要 Go 或 glibc。
+编译需要 Go 1.26 或更高版本；生成的静态 Linux 二进制运行时不需要 Go 或 glibc。
 
 ```sh
 cd src
@@ -32,6 +32,17 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o njtechlogin-linux-arm64 .
 GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0 go build -o njtechlogin-linux-mipsle .
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o njtechlogin-darwin-arm64 .
 ```
+
+## 发布
+
+推送任意分支会运行 CI。发布标签使用 `release-vX.Y.Z`；带 `-alpha.1`、`-beta.1` 或 `-rc.1` 等后缀的版本会自动创建预发布：
+
+```sh
+git tag release-v2.0.0
+git push origin release-v2.0.0
+```
+
+标签推送后，GitHub Actions 会为 Linux amd64/arm64/386/mips/mipsle 和 macOS amd64/arm64 构建二进制、生成 `SHA256SUMS` 并创建 Release。
 
 ## 使用
 
@@ -138,6 +149,9 @@ v2 使用标准子命令：
 ## 验证边界
 
 - 单元测试固定了 v1 的认证请求路径、查询参数和请求头。
+- `loadConfig` 必须返回业务码 `1` 才会提交登录；认证请求不跟随重定向，避免敏感查询参数进入 Referer。
+- 门户响应和 gzip 解压结果均限制为 `1 MiB`。
+- CI 在 Linux/macOS 运行测试、race 和 vet，并在 Windows 验证编译、测试和 vet。
 - CI 验证 Alpine/OpenRC 的安装、脱离终端、异常重启、启停和卸载。
 - OpenWrt 当前只有 procd/rootfs 模拟验证；`v2.0.0` 稳定版发布前仍需真机验收。
 - 当前开发环境不在校园网内，因此不以真实登录结果作为 v2 守护重构的验收项。

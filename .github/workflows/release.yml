@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'release-v*'
 
 permissions:
   contents: write
@@ -16,13 +16,34 @@ jobs:
         working-directory: src
     steps:
       - uses: actions/checkout@v4
+      - name: Validate release tag
+        id: release
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#release-v}"
+          if [[ "$tag" == "$version" || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.x'
           cache-dependency-path: src/go.sum
+      - name: Test release source
+        run: |
+          go test ./...
+          go vet ./...
       - name: Build release binaries
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -eu
           mkdir -p ../dist
@@ -33,11 +54,11 @@ jobs:
             gomips="${4:-}"
             if [ -n "$gomips" ]; then
               CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" GOMIPS="$gomips" \
-                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION#v}" \
+                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION}" \
                 -o "../dist/njtechlogin-${suffix}" .
             else
               CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
-                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION#v}" \
+                go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_VERSION}" \
                 -o "../dist/njtechlogin-${suffix}" .
             fi
           }
@@ -54,11 +75,12 @@ jobs:
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           set -eu
-          prerelease=""
-          case "${GITHUB_REF_NAME}" in
-            *-*) prerelease="--prerelease" ;;
-          esac
-          gh release create "${GITHUB_REF_NAME}" ./* \
-            --generate-notes --verify-tag ${prerelease}
+          release_args=(--generate-notes --verify-tag)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" ./* "${release_args[@]}"

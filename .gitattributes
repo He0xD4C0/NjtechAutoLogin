@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.sh text eol=lf
+test/integration/openrc/syslog text eol=lf
+test/integration/procd/rc.common text eol=lf

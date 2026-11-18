@@ -256,35 +256,19 @@ func installManagedService(manager Manager, selfPath, configPath string, cfg Con
 		return fmt.Errorf("停止 v1 守护进程失败: %w", err)
 	}
 
-	rollback := func(cause error) error {
-		var rollbackErr error
-		rollbackErr = errors.Join(rollbackErr, manager.Stop())
-		rollbackErr = errors.Join(rollbackErr, manager.Disable())
-		rollbackErr = errors.Join(rollbackErr, restoreSnapshots(snapshots))
-		rollbackErr = errors.Join(rollbackErr, manager.Reload())
-		if previouslyRunning == serviceRunning {
-			rollbackErr = errors.Join(rollbackErr, manager.Enable())
-			rollbackErr = errors.Join(rollbackErr, manager.Start())
-		}
-		if rollbackErr != nil {
-			return fmt.Errorf("%w；回滚未完全成功: %v", cause, rollbackErr)
-		}
-		return cause
-	}
-
 	for _, target := range targets {
 		if err := atomicWriteFile(target.path, target.data, target.mode); err != nil {
-			return rollback(fmt.Errorf("写入 %s 失败: %w", target.path, err))
+			return rollbackInstall(manager, snapshots, previouslyRunning, fmt.Errorf("写入 %s 失败: %w", target.path, err))
 		}
 	}
 	if err := manager.Reload(); err != nil {
-		return rollback(fmt.Errorf("刷新服务管理器失败: %w", err))
+		return rollbackInstall(manager, snapshots, previouslyRunning, fmt.Errorf("刷新服务管理器失败: %w", err))
 	}
 	if err := manager.Enable(); err != nil {
-		return rollback(fmt.Errorf("启用服务失败: %w", err))
+		return rollbackInstall(manager, snapshots, previouslyRunning, fmt.Errorf("启用服务失败: %w", err))
 	}
 	if err := manager.Start(); err != nil {
-		return rollback(fmt.Errorf("启动服务失败: %w", err))
+		return rollbackInstall(manager, snapshots, previouslyRunning, fmt.Errorf("启动服务失败: %w", err))
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -294,7 +278,25 @@ func installManagedService(manager Manager, selfPath, configPath string, cfg Con
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	return rollback(errors.New("服务启动后未进入运行状态"))
+	return rollbackInstall(manager, snapshots, previouslyRunning, errors.New("服务启动后未进入运行状态"))
+}
+
+func rollbackInstall(manager Manager, snapshots []fileSnapshot, previouslyRunning serviceState, cause error) error {
+	var rollbackErr error
+	if manager.Installed() {
+		rollbackErr = errors.Join(rollbackErr, manager.Stop())
+		rollbackErr = errors.Join(rollbackErr, manager.Disable())
+	}
+	rollbackErr = errors.Join(rollbackErr, restoreSnapshots(snapshots))
+	rollbackErr = errors.Join(rollbackErr, manager.Reload())
+	if previouslyRunning == serviceRunning {
+		rollbackErr = errors.Join(rollbackErr, manager.Enable())
+		rollbackErr = errors.Join(rollbackErr, manager.Start())
+	}
+	if rollbackErr != nil {
+		return fmt.Errorf("%w；回滚未完全成功: %v", cause, rollbackErr)
+	}
+	return cause
 }
 
 func preflightTargetDirectories(targets []struct {

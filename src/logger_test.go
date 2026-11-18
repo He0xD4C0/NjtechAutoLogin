@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -33,6 +34,9 @@ func TestFileLoggerWritesPrivatelyAndCleansOldLogs(t *testing.T) {
 	info, err := os.Stat(currentPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX file modes")
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("log mode = %o", info.Mode().Perm())

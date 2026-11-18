@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,9 @@ func TestAtomicConfigWriteForcesPrivateMode(t *testing.T) {
 	}
 	if err := atomicWriteFile(path, []byte("new-secret"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX file modes")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

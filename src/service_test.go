@@ -125,8 +125,10 @@ func TestLaunchdPlistPassesPlutil(t *testing.T) {
 }
 
 type rollbackManager struct {
-	layout     serviceLayout
-	startCalls int
+	layout       serviceLayout
+	startCalls   int
+	stopCalls    int
+	disableCalls int
 }
 
 func (m *rollbackManager) Name() string          { return "fake" }
@@ -137,9 +139,9 @@ func (m *rollbackManager) Definition(serviceSpec) ([]byte, os.FileMode, error) {
 }
 func (m *rollbackManager) Installed() bool               { return fileExists(m.layout.ServicePath) }
 func (m *rollbackManager) Enable() error                 { return nil }
-func (m *rollbackManager) Disable() error                { return nil }
+func (m *rollbackManager) Disable() error                { m.disableCalls++; return nil }
 func (m *rollbackManager) Start() error                  { m.startCalls++; return errors.New("start failed") }
-func (m *rollbackManager) Stop() error                   { return nil }
+func (m *rollbackManager) Stop() error                   { m.stopCalls++; return nil }
 func (m *rollbackManager) Restart() error                { return nil }
 func (m *rollbackManager) Status() (serviceState, error) { return serviceRunning, nil }
 func (m *rollbackManager) Reload() error                 { return nil }
@@ -184,6 +186,23 @@ func TestInstallFailureRestoresAllFiles(t *testing.T) {
 	}
 	if manager.startCalls != 2 {
 		t.Fatalf("start calls = %d, want new start plus rollback restart", manager.startCalls)
+	}
+}
+
+func TestRollbackBeforeServiceInstallationDoesNotDisableService(t *testing.T) {
+	dir := t.TempDir()
+	manager := &rollbackManager{layout: serviceLayout{
+		BinaryPath:  filepath.Join(dir, "bin"),
+		ConfigPath:  filepath.Join(dir, "config.yml"),
+		ServicePath: filepath.Join(dir, "service"),
+		StatePath:   filepath.Join(dir, "state.json"),
+	}}
+	cause := errors.New("config write failed")
+	if err := rollbackInstall(manager, nil, serviceStopped, cause); !errors.Is(err, cause) {
+		t.Fatalf("rollback error = %v, want cause", err)
+	}
+	if manager.stopCalls != 0 || manager.disableCalls != 0 {
+		t.Fatalf("unexpected service calls: stop=%d disable=%d", manager.stopCalls, manager.disableCalls)
 	}
 }
 

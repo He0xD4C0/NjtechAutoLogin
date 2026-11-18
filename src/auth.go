@@ -22,10 +22,15 @@ var globalLogger *Logger
 
 var httpClient = newHTTPClient()
 
+const maxPortalResponseBytes = 1 << 20
+
 func newHTTPClient() *http.Client {
 	client := &http.Client{
 		Timeout: 15 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if req.URL.Hostname() != "10.50.255.11" {
+				return http.ErrUseLastResponse
+			}
 			return nil
 		},
 	}
@@ -34,6 +39,14 @@ func newHTTPClient() *http.Client {
 		client.Jar = jar
 	}
 	return client
+}
+
+func withoutRedirects(client *http.Client) *http.Client {
+	clone := *client
+	clone.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &clone
 }
 
 // getOutboundIP keeps the original portal-first routing behavior.
@@ -68,7 +81,7 @@ func newRequest(ctx context.Context, method, requestURL string, body io.Reader) 
 
 func readResponseBody(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -79,13 +92,33 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 			return nil, fmt.Errorf("创建gzip reader失败: %v", err)
 		}
 		defer reader.Close()
-		decompressed, err := io.ReadAll(reader)
+		decompressed, err := readLimited(reader)
 		if err != nil {
 			return nil, fmt.Errorf("gzip解压失败: %v", err)
 		}
 		return decompressed, nil
 	}
 	return body, nil
+}
+
+func readLimited(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxPortalResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxPortalResponseBytes {
+		return nil, fmt.Errorf("响应超过 %d 字节上限", maxPortalResponseBytes)
+	}
+	return body, nil
+}
+
+func extractJSONP(body []byte, callback string) ([]byte, error) {
+	pattern := regexp.MustCompile(`(?s)\b` + regexp.QuoteMeta(callback) + `\s*\(\s*(\{.*\})\s*\)\s*;?\s*$`)
+	matches := pattern.FindSubmatch(body)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("无法提取 %s JSONP 响应", callback)
+	}
+	return matches[1], nil
 }
 
 func visitHomepage(ctx context.Context) error {
@@ -112,6 +145,7 @@ func login(ctx context.Context, username, password, provider string) error {
 	if err := visitHomepage(ctx); err != nil {
 		globalLogger.Printf("访问首页失败（不影响登录尝试）: %v", err)
 	}
+	portalClient := withoutRedirects(httpClient)
 
 	ip, iface, err := getOutboundIP()
 	if err != nil {
@@ -133,7 +167,7 @@ func login(ctx context.Context, username, password, provider string) error {
 		return err
 	}
 	req.Header.Set("Referer", "http://10.50.255.11/")
-	resp, err := httpClient.Do(req)
+	resp, err := portalClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("loadConfig请求失败: %v", err)
 	}
@@ -141,8 +175,21 @@ func login(ctx context.Context, username, password, provider string) error {
 	if err != nil {
 		return fmt.Errorf("读取loadConfig响应失败: %v", err)
 	}
-	if !bytes.Contains(body, []byte(`"code":1`)) {
-		globalLogger.Printf("loadConfig返回异常（响应已省略）")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("loadConfig返回异常状态: HTTP %d", resp.StatusCode)
+	}
+	jsonData, err := extractJSONP(body, "dr1001")
+	if err != nil {
+		return fmt.Errorf("loadConfig响应解析失败（响应已省略）: %v", err)
+	}
+	var loadResult struct {
+		Code int `json:"code"`
+	}
+	if err := json.Unmarshal(jsonData, &loadResult); err != nil {
+		return fmt.Errorf("loadConfig JSON解析失败: %v", err)
+	}
+	if loadResult.Code != 1 {
+		return fmt.Errorf("loadConfig返回异常业务码: %d", loadResult.Code)
 	}
 
 	userAccount := fmt.Sprintf(",0,%s@%s", username, provider)
@@ -153,7 +200,7 @@ func login(ctx context.Context, username, password, provider string) error {
 		return err
 	}
 	req.Header.Set("Referer", "http://10.50.255.11/")
-	resp, err = httpClient.Do(req)
+	resp, err = portalClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("登录请求失败: %v", safeRequestError(err))
 	}
@@ -161,17 +208,19 @@ func login(ctx context.Context, username, password, provider string) error {
 	if err != nil {
 		return fmt.Errorf("读取登录响应失败: %v", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("登录返回异常状态: HTTP %d", resp.StatusCode)
+	}
 
-	re := regexp.MustCompile(`dr1003\s*\(\s*({.*?})\s*\)\s*`)
-	matches := re.FindSubmatch(body)
-	if len(matches) < 2 {
+	jsonData, err = extractJSONP(body, "dr1003")
+	if err != nil {
 		return fmt.Errorf("登录响应解析失败，无法提取JSON（响应已省略）")
 	}
 	var result struct {
 		Result int    `json:"result"`
 		Msg    string `json:"msg"`
 	}
-	if err := json.Unmarshal(matches[1], &result); err != nil {
+	if err := json.Unmarshal(jsonData, &result); err != nil {
 		return fmt.Errorf("JSON解析失败: %v", err)
 	}
 	if result.Result != 1 {

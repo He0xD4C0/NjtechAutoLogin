@@ -6,17 +6,20 @@ import (
 	"time"
 )
 
-var checkURLs = []struct {
-	url     string
-	keyword string
-	bytes   string
-}{
-	{url: "http://www.msftncsi.com/ncsi.txt", bytes: "Microsoft NCSI"},
-	{url: "http://captive.apple.com/hotspot-detect.html", keyword: "Success"},
-	{url: "http://www.baidu.com", keyword: "百度"},
-	{url: "http://connect.rom.miui.com/generate_204", bytes: ""},
-	{url: "http://www.qq.com", keyword: "腾讯"},
-	{url: "http://www.163.com", keyword: "网易"},
+type internetEndpoint struct {
+	url       string
+	status    int
+	keyword   string
+	exactBody string
+}
+
+var checkURLs = []internetEndpoint{
+	{url: "http://www.msftncsi.com/ncsi.txt", status: 200, exactBody: "Microsoft NCSI"},
+	{url: "http://captive.apple.com/hotspot-detect.html", status: 200, keyword: "Success"},
+	{url: "http://www.baidu.com", status: 200, keyword: "百度"},
+	{url: "http://connect.rom.miui.com/generate_204", status: 204},
+	{url: "http://www.qq.com", status: 200, keyword: "腾讯"},
+	{url: "http://www.163.com", status: 200, keyword: "网易"},
 }
 
 func checkInternet(ctx context.Context) bool {
@@ -40,15 +43,18 @@ func checkInternet(ctx context.Context) bool {
 		if strings.Contains(string(body), "Dr.COMWebLoginID") {
 			return false
 		}
-		if endpoint.bytes != "" {
-			if strings.TrimSpace(string(body)) == endpoint.bytes {
+		if resp.StatusCode != endpoint.status {
+			continue
+		}
+		if endpoint.exactBody != "" {
+			if strings.TrimSpace(string(body)) == endpoint.exactBody {
 				return true
 			}
 		} else if endpoint.keyword != "" {
 			if strings.Contains(string(body), endpoint.keyword) {
 				return true
 			}
-		} else {
+		} else if len(body) == 0 {
 			return true
 		}
 	}

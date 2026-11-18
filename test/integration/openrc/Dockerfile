@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY src/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
