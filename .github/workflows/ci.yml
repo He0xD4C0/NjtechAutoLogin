@@ -22,8 +22,8 @@ jobs:
       run:
         working-directory: src
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
           cache-dependency-path: src/go.sum
@@ -40,8 +40,8 @@ jobs:
       run:
         working-directory: src
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
           cache-dependency-path: src/go.sum
@@ -51,7 +51,7 @@ jobs:
   alpine-openrc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build Alpine/OpenRC test image
         run: docker build -f test/integration/openrc/Dockerfile -t njtechlogin-openrc-test .
       - name: Exercise OpenRC lifecycle with init as PID 1
@@ -71,7 +71,7 @@ jobs:
   openwrt-procd-simulation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build OpenWrt/procd simulation image
         run: docker build -f test/integration/procd/Dockerfile -t njtechlogin-procd-test .
       - name: Exercise procd init script simulation
@@ -80,7 +80,7 @@ jobs:
   systemd:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build systemd test image
         run: docker build -f test/integration/systemd/Dockerfile -t njtechlogin-systemd-test .
       - name: Exercise systemd lifecycle
@@ -123,8 +123,8 @@ jobs:
           - { goos: netbsd, goarch: amd64, suffix: netbsd-amd64 }
           - { goos: netbsd, goarch: arm64, suffix: netbsd-arm64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
           cache-dependency-path: src/go.sum
